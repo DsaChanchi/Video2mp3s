@@ -7,6 +7,10 @@ from pytubefix import YouTube
 from moviepy.audio.io.AudioFileClip import AudioFileClip
 
 
+# ==================================================
+# UTILIDADES
+# ==================================================
+
 def sanitize_filename(name):
     name = re.sub(r'[<>:"/\\|?*]', "_", name).strip()
     return name[:200]
@@ -32,8 +36,7 @@ def crear_subclip(audio, inicio, fin):
         return audio.subclip(inicio, fin)
 
     raise RuntimeError(
-        f"Método de corte no encontrado. "
-        f"MoviePy {moviepy.__version__}"
+        f"MoviePy incompatible: {moviepy.__version__}"
     )
 
 
@@ -51,10 +54,7 @@ def guardar_audio(clip, destino):
     if "verbose" in params:
         kwargs["verbose"] = False
 
-    clip.write_audiofile(
-        destino,
-        **kwargs
-    )
+    clip.write_audiofile(destino, **kwargs)
 
 
 def on_progress(stream, chunk, bytes_remaining):
@@ -65,7 +65,6 @@ def on_progress(stream, chunk, bytes_remaining):
         return
 
     descargado = total - bytes_remaining
-
     porcentaje = (descargado / total) * 100
 
     print(
@@ -83,91 +82,90 @@ print(f"MoviePy detectado: {moviepy.__version__}")
 
 url = input("\nURL del vídeo: ").strip()
 
+yt = YouTube(url, on_progress_callback=on_progress)
+
 # ==================================================
-# LISTA DE TIEMPOS
+# CARPETA DEL VÍDEO
 # ==================================================
 
-print("\nPega la lista completa.")
-print("Formato: HH:MM:SS - Texto")
-print("Escribe FIN para terminar.\n")
+titulo_video = sanitize_folder_name(yt.title)
 
-lines = []
+OUTPUT_DIR = os.path.join(os.getcwd(), titulo_video)
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-while True:
+print(f"\nVídeo: {yt.title}")
+print(f"Carpeta: {OUTPUT_DIR}")
 
-    line = input()
-
-    if line.strip().upper() == "FIN":
-        break
-
-    lines.append(line)
+# ==================================================
+# DETECCIÓN DE CAPÍTULOS O INPUT MANUAL
+# ==================================================
 
 segments = []
 
-for line in lines:
+print("\nBuscando capítulos...")
 
-    line = line.strip()
+try:
+    chapters = yt.chapters
 
-    if not line:
-        continue
+    if chapters and len(chapters) > 0:
 
-    if " - " not in line:
-        print(f"Línea ignorada: {line}")
-        continue
+        for ch in chapters:
+            segments.append({
+                "start": int(ch.start_seconds),
+                "title": ch.title.strip()
+            })
 
-    try:
+        segments.sort(key=lambda x: x["start"])
 
-        tiempo, texto = line.split(" - ", 1)
+        print(f"Capítulos encontrados: {len(segments)}\n")
 
-        segments.append({
-            "start": time_to_seconds(
-                tiempo.strip()
-            ),
-            "title": texto.strip()
-        })
+        for s in segments:
+            h = s["start"] // 3600
+            m = (s["start"] % 3600) // 60
+            sec = s["start"] % 60
 
-    except Exception:
-        print(f"Línea ignorada: {line}")
+            print(f"{h:02d}:{m:02d}:{sec:02d} - {s['title']}")
+
+    else:
+        raise Exception()
+
+except Exception:
+
+    print("\nNo hay capítulos. Usando entrada manual.\n")
+    print("Formato: HH:MM:SS - Texto")
+    print("Escribe FIN para terminar.\n")
+
+    lines = []
+
+    while True:
+        line = input()
+        if line.strip().upper() == "FIN":
+            break
+        lines.append(line)
+
+    for line in lines:
+
+        if " - " not in line:
+            continue
+
+        try:
+            t, txt = line.split(" - ", 1)
+
+            segments.append({
+                "start": time_to_seconds(t.strip()),
+                "title": txt.strip()
+            })
+
+        except:
+            pass
 
 if not segments:
-    raise Exception(
-        "No se encontraron segmentos válidos."
-    )
+    raise Exception("No hay segmentos válidos.")
 
-segments.sort(
-    key=lambda x: x["start"]
-)
+segments.sort(key=lambda x: x["start"])
 
 # ==================================================
-# YOUTUBE
-# ==================================================
-
-print()
-
-yt = YouTube(
-    url,
-    on_progress_callback=on_progress
-)
-
-titulo_video = sanitize_folder_name(
-    yt.title
-)
-
-OUTPUT_DIR = os.path.join(
-    os.getcwd(),
-    titulo_video
-)
-
-os.makedirs(
-    OUTPUT_DIR,
-    exist_ok=True
-)
-
-print(f"Vídeo detectado: {yt.title}")
-print(f"Carpeta destino: {OUTPUT_DIR}")
-
-# ==================================================
-# DESCARGA
+# DESCARGA AUDIO
 # ==================================================
 
 stream = (
@@ -184,106 +182,55 @@ audio_path = stream.download(
 )
 
 print("\nDescarga completada.")
-print("Archivo:", audio_path)
 
 # ==================================================
 # DURACIÓN
 # ==================================================
 
-print("\nAnalizando audio...")
-
 audio = AudioFileClip(audio_path)
-
 duration = audio.duration
-
 audio.close()
 
-print(
-    f"Duración detectada: "
-    f"{duration:.2f} segundos"
-)
+print(f"Duración: {duration:.2f}s")
 
 # ==================================================
-# CONVERSIÓN
+# GENERAR MP3
 # ==================================================
 
 print("\nGenerando MP3...\n")
 
-total_segments = len(segments)
+total = len(segments)
 
 for i, seg in enumerate(segments):
 
     start = seg["start"]
 
-    if i < total_segments - 1:
+    if i < total - 1:
         end = segments[i + 1]["start"]
     else:
         end = duration
 
-    nombre = (
-        sanitize_filename(
-            seg["title"]
-        ) + ".mp3"
-    )
-
-    destino = os.path.join(
-        OUTPUT_DIR,
-        nombre
-    )
+    name = sanitize_filename(seg["title"]) + ".mp3"
+    path = os.path.join(OUTPUT_DIR, name)
 
     audio_clip = None
     clip = None
 
     try:
-
-        audio_clip = AudioFileClip(
-            audio_path
-        )
-
-        clip = crear_subclip(
-            audio_clip,
-            start,
-            end
-        )
-
-        guardar_audio(
-            clip,
-            destino
-        )
-
-    except Exception as e:
-
-        print(
-            f"\nERROR en '{nombre}':"
-        )
-        print(e)
-
-        continue
+        audio_clip = AudioFileClip(audio_path)
+        clip = crear_subclip(audio_clip, start, end)
+        guardar_audio(clip, path)
 
     finally:
-
         try:
             if clip:
                 clip.close()
-        except:
-            pass
-
-        try:
             if audio_clip:
                 audio_clip.close()
         except:
             pass
 
-    porcentaje = (
-        (i + 1)
-        / total_segments
-    ) * 100
-
-    print(
-        f"[{i + 1}/{total_segments}] "
-        f"{porcentaje:6.2f}% -> "
-        f"{nombre}"
-    )
+    print(f"[{i+1}/{total}] {name}")
 
 # ==================================================
 # LIMPIEZA
@@ -292,8 +239,8 @@ for i, seg in enumerate(segments):
 try:
     os.remove(audio_path)
     print("\nAudio temporal eliminado.")
-except Exception:
+except:
     pass
 
-print("\nProceso completado.")
-print(f"Carpeta de salida:\n{OUTPUT_DIR}")
+print("\n✔ Proceso completado")
+print("Carpeta:", OUTPUT_DIR)
